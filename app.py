@@ -19,7 +19,7 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 import faiss
 import numpy as np
 import os
-import json # Import json untuk mem-parsing secrets
+import json
 
 # --- Konfigurasi Firebase ---
 try:
@@ -28,27 +28,24 @@ try:
 except ValueError:
     try:
         # --- PERBAIKAN UTAMA DI SINI ---
-        # Ambil kredensial sebagai string mentah jika memungkinkan, lalu parse sebagai JSON.
-        # Ini memberikan kontrol lebih atas format data.
-        creds_json_str = st.secrets["firebase_credentials_json"]
-        creds_dict = json.loads(creds_json_str)
+        # Ambil kredensial dari secrets.toml. Objek ini bersifat read-only.
+        creds_from_secrets = st.secrets["firebase_credentials"]
         
-        # Inisialisasi dari kamus yang sudah di-parse
+        # Buat salinan yang bisa diubah (mutable copy) dalam bentuk dictionary
+        creds_dict = dict(creds_from_secrets)
+
+        # Perbaiki format private_key di dalam salinan dictionary
+        if 'private_key' in creds_dict:
+            creds_dict['private_key'] = creds_dict['private_key'].replace('\\n', '\n')
+
+        # Inisialisasi Firebase menggunakan dictionary yang sudah diperbaiki
         cred = credentials.Certificate(creds_dict)
         firebase_admin.initialize_app(cred)
-    except Exception as e_json:
-        # Fallback ke metode lama jika metode JSON gagal
-        try:
-            creds_dict_fallback = st.secrets["firebase_credentials"]
-            if 'private_key' in creds_dict_fallback:
-                creds_dict_fallback['private_key'] = creds_dict_fallback['private_key'].replace('\\n', '\n')
-            cred_fallback = credentials.Certificate(creds_dict_fallback)
-            firebase_admin.initialize_app(cred_fallback)
-        except Exception as e_toml:
-            st.error("Gagal menginisialisasi Firebase. Pastikan format 'firebase_credentials' di secrets.toml benar.")
-            st.error(f"Error detail (JSON method): {e_json}")
-            st.error(f"Error detail (TOML method): {e_toml}")
-            st.stop()
+
+    except Exception as e:
+        st.error("Gagal menginisialisasi Firebase. Pastikan `[firebase_credentials]` ada dan formatnya benar di secrets.toml Anda.")
+        st.error(f"Detail Error: {e}")
+        st.stop()
 
 
 db = firestore.client()
