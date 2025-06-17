@@ -2,10 +2,12 @@
 
 import streamlit as st
 import google.generativeai as genai
-import json
-import os
 import bcrypt
 from config import API_KEY
+
+# Library untuk Firebase
+import firebase_admin
+from firebase_admin import credentials, firestore
 
 # Library untuk RAG dan pemrosesan file
 import pandas as pd
@@ -16,6 +18,19 @@ import io
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 import faiss
 import numpy as np
+import os
+
+# --- Konfigurasi Firebase ---
+try:
+    # Coba inisialisasi hanya jika belum ada
+    firebase_admin.get_app()
+except ValueError:
+    # Ambil kredensial dari Streamlit secrets
+    creds_dict = st.secrets["firebase_credentials"]
+    cred = credentials.Certificate(creds_dict)
+    firebase_admin.initialize_app(cred)
+
+db = firestore.client()
 
 # --- Konfigurasi Gemini API ---
 if not API_KEY or API_KEY == "MASUKKAN_API_KEY_ANDA_DI_SINI":
@@ -30,29 +45,32 @@ except Exception as e:
     st.error(f"Gagal mengkonfigurasi Gemini API: {e}")
     st.stop()
 
+# --- Fungsi Helper Baru dengan Firestore ---
 
-# --- Fungsi Helper (Login, User, dll - tidak berubah) ---
-def load_users():
-    if not os.path.exists("users.json"):
-        with open("users.json", "w") as f: json.dump({}, f)
-        return {}
-    try:
-        with open("users.json", "r") as f: return json.load(f)
-    except json.JSONDecodeError: return {}
+def load_user(username):
+    """Memuat data pengguna dari Firestore."""
+    user_ref = db.collection('users').document(username).get()
+    return user_ref.to_dict() if user_ref.exists else None
 
-def save_users(users_data):
-    with open("users.json", "w") as f: json.dump(users_data, f, indent=4)
+def save_user(username, password_hash):
+    """Menyimpan pengguna baru atau memperbarui password di Firestore."""
+    db.collection('users').document(username).set({'password_hash': password_hash})
 
 def save_chat(username, chat_history):
-    os.makedirs("chat_history", exist_ok=True)
-    with open(f"chat_history/{username}.json", "w") as f: json.dump(chat_history, f, indent=4)
+    """Menyimpan riwayat percakapan ke sub-koleksi di Firestore."""
+    user_ref = db.collection('users').document(username)
+    user_ref.set({'chat_history': chat_history}, merge=True)
 
 def load_chat(username):
-    chat_file = f"chat_history/{username}.json"
-    if not os.path.exists(chat_file): return []
-    try:
-        with open(chat_file, "r") as f: return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError): return []
+    """Memuat riwayat percakapan dari Firestore."""
+    user_data = load_user(username)
+    return user_data.get('chat_history', []) if user_data else []
+
+def delete_chat_history(username):
+    """Menghapus riwayat percakapan dari Firestore."""
+    user_ref = db.collection('users').document(username)
+    user_ref.update({'chat_history': firestore.DELETE_FIELD})
+
 
 def hash_password(password):
     return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
@@ -64,10 +82,8 @@ def check_password(password, hashed_password):
     except Exception: return False
 
 
-# --- Fungsi untuk RAG dan Pemrosesan File ---
-
+# --- Fungsi RAG dan Pemrosesan File (tidak berubah) ---
 def get_text_from_file(uploaded_file):
-    """Mengekstrak teks mentah dari berbagai jenis file untuk RAG."""
     file_bytes = uploaded_file.getvalue()
     text_content = ""
     file_extension = os.path.splitext(uploaded_file.name)[1].lower()
@@ -81,21 +97,17 @@ def get_text_from_file(uploaded_file):
         elif file_extension == '.xlsx':
             df = pd.read_excel(io.BytesIO(file_bytes))
             text_content = df.to_markdown(index=False)
-        else:
-            return None
+        else: return None
         return text_content
     except Exception as e:
         st.error(f"Gagal mengekstrak teks dari {uploaded_file.name}: {e}")
         return None
 
 def get_text_chunks(text):
-    """Memecah teks menjadi potongan-potongan yang lebih kecil (chunks)."""
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-    chunks = text_splitter.split_text(text)
-    return chunks
+    return text_splitter.split_text(text)
 
 def get_vector_store(text_chunks):
-    """Membuat embeddings dan menyimpannya di database vektor FAISS."""
     if not text_chunks: return None
     try:
         response = genai.embed_content(model=embedding_model.model_name, content=text_chunks, task_type="retrieval_document")
@@ -109,18 +121,15 @@ def get_vector_store(text_chunks):
         return None, None
 
 def get_relevant_context(query, index, text_chunks):
-    """Mencari potongan teks yang relevan dari vector store."""
     try:
         query_embedding = genai.embed_content(model=embedding_model.model_name, content=query, task_type="retrieval_query")['embedding']
         D, I = index.search(np.array([query_embedding]), k=3)
-        context = "\n".join([text_chunks[i] for i in I[0]])
-        return context
+        return "\n".join([text_chunks[i] for i in I[0]])
     except Exception as e:
         st.error(f"Gagal mengambil konteks relevan: {e}")
         return ""
 
 def handle_general_upload(uploaded_file):
-    """Menangani upload file umum (gambar)."""
     file_extension = os.path.splitext(uploaded_file.name)[1].lower()
     if file_extension in ['.jpg', '.jpeg', '.png']:
         try:
@@ -141,7 +150,7 @@ def format_chat_for_download(chat_history):
 
 # --- Inisialisasi Aplikasi Streamlit ---
 st.set_page_config(page_title="AI RAG Perusahaan", layout="wide")
-st.title("🤖 Rahsa AI")
+st.title("🤖 AI Asisten dengan Firebase")
 
 # Inisialisasi session state
 if "logged_in" not in st.session_state: st.session_state.logged_in = False
@@ -152,7 +161,7 @@ if "text_chunks" not in st.session_state: st.session_state.text_chunks = None
 if "processed_filename" not in st.session_state: st.session_state.processed_filename = ""
 if "general_file_content" not in st.session_state: st.session_state.general_file_content = None
 
-# --- Halaman Login & Register (tidak berubah) ---
+# --- Halaman Login & Register ---
 if not st.session_state.logged_in:
     tab1, tab2 = st.tabs(["🔐 Login", "✍️ Register"])
     with tab1:
@@ -160,42 +169,44 @@ if not st.session_state.logged_in:
             username = st.text_input("Username", key="login_user")
             password = st.text_input("Password", type="password", key="login_pass")
             if st.form_submit_button("Login"):
-                users = load_users()
-                if username in users and check_password(password, users[username]):
-                    st.session_state.logged_in, st.session_state.username = True, username
+                user_data = load_user(username)
+                if user_data and check_password(password, user_data.get('password_hash')):
+                    st.session_state.logged_in = True
+                    st.session_state.username = username
                     st.session_state.chat_history = load_chat(username)
                     st.success("Login berhasil!"), st.rerun()
-                else: st.error("Username atau password salah.")
+                else:
+                    st.error("Username atau password salah.")
     with tab2:
         with st.form("register_form"):
             new_user = st.text_input("Username Baru", key="reg_user")
             new_pass = st.text_input("Password Baru", type="password", key="reg_pass")
             if st.form_submit_button("Register"):
-                users = load_users()
-                if new_user in users: st.error("Username sudah terdaftar.")
+                if load_user(new_user):
+                    st.error("Username sudah terdaftar.")
                 else:
-                    users[new_user] = hash_password(new_pass)
-                    save_users(users), st.success("Registrasi berhasil! Silakan login.")
+                    hashed_pass = hash_password(new_pass)
+                    save_user(new_user, hashed_pass)
+                    st.success("Registrasi berhasil! Silakan login.")
 
 # --- Halaman Chat Utama ---
 else:
-    # --- Sidebar ---
+    # Sidebar
     st.sidebar.title("Opsi")
     st.sidebar.write(f"Selamat datang, **{st.session_state.username}**!")
     if st.sidebar.button("🗑️ Hapus Riwayat Chat", use_container_width=True):
+        delete_chat_history(st.session_state.username)
         st.session_state.chat_history = []
-        if os.path.exists(f"chat_history/{st.session_state.username}.json"):
-            os.remove(f"chat_history/{st.session_state.username}.json")
         st.success("Riwayat percakapan telah dihapus."), st.rerun()
     st.sidebar.download_button(label="📥 Unduh Riwayat Chat", data=format_chat_for_download(st.session_state.chat_history),
                                file_name=f"chat_history_{st.session_state.username}.txt", mime="text/plain",
                                use_container_width=True, disabled=not st.session_state.chat_history)
     if st.sidebar.button("Logout", use_container_width=True):
-        save_chat(st.session_state.username, st.session_state.chat_history)
+        # Data sudah tersimpan per interaksi, jadi logout bisa langsung
         for key in list(st.session_state.keys()): del st.session_state[key]
         st.rerun()
 
-    # --- Area Unggah RAG (Sidebar) ---
+    # RAG Uploader (Sidebar)
     st.sidebar.header("Basis Pengetahuan (RAG)")
     rag_file = st.sidebar.file_uploader("Unggah PDF/DOCX/XLSX untuk RAG.", type=['pdf', 'docx', 'xlsx'])
     if rag_file and rag_file.name != st.session_state.processed_filename:
@@ -214,68 +225,63 @@ else:
             st.session_state.vector_store, st.session_state.text_chunks, st.session_state.processed_filename = None, None, ""
             st.rerun()
 
-    # --- Area Chat ---
+    # Area Chat
     for msg in st.session_state.chat_history:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
-            if "image" in msg:
-                st.image(msg["image"])
+            if "image_b64" in msg: # Check for base64 image string
+                st.image(Image.open(io.BytesIO(base64.b64decode(msg["image_b64"]))))
 
-    # --- Area Unggah File Umum (Halaman Utama) ---
+
     with st.expander("📎 Analisis File Sekali Pakai (Contoh: Gambar)"):
         general_file = st.file_uploader("Unggah file gambar", type=['jpg', 'jpeg', 'png'])
         if general_file:
             st.session_state.general_file_content = handle_general_upload(general_file)
 
+
     if prompt := st.chat_input("Ketik pertanyaan Anda..."):
-        # Tambah pesan ke histori UI dulu
         user_message = {"role": "user", "content": prompt}
         if st.session_state.general_file_content:
-            user_message["image"] = st.session_state.general_file_content
-        st.session_state.chat_history.append(user_message)
-        with st.chat_message("user"):
-            st.markdown(prompt)
-            if st.session_state.general_file_content:
+            # Don't save image object directly, we will handle it in the API call
+            with st.chat_message("user"):
+                st.markdown(prompt)
                 st.image(st.session_state.general_file_content, width=200)
+        else:
+            with st.chat_message("user"):
+                st.markdown(prompt)
+        
+        st.session_state.chat_history.append(user_message)
+
 
         with st.spinner("AI sedang berpikir..."):
             try:
-                # Siapkan konten untuk API
                 api_request = []
                 final_prompt = prompt
 
-                # Prioritas 1: File umum (gambar)
                 if st.session_state.general_file_content:
                     api_request.append(prompt)
                     api_request.append(st.session_state.general_file_content)
-                # Prioritas 2: Konteks RAG
                 elif st.session_state.vector_store:
                     context = get_relevant_context(prompt, st.session_state.vector_store, st.session_state.text_chunks)
                     final_prompt = f"Berdasarkan konteks berikut:\n---\n{context}\n---\nJawablah pertanyaan ini: {prompt}"
                     api_request.append(final_prompt)
-                # Prioritas 3: Teks biasa
                 else:
                     api_request.append(prompt)
 
-                # Format histori chat untuk API
                 formatted_history = []
                 for msg in st.session_state.chat_history[:-1]:
-                    # Jangan masukkan gambar dari histori ke dalam request API berikutnya
-                    if "image" not in msg:
-                        role = "model" if msg["role"] == "assistant" else msg["role"]
-                        formatted_history.append({"role": role, "parts": [{"text": msg["content"]}]})
+                    role = "model" if msg["role"] == "assistant" else msg["role"]
+                    formatted_history.append({"role": role, "parts": [{"text": msg["content"]}]})
 
-                # Kirim ke API
                 chat_session = generation_model.start_chat(history=formatted_history)
                 response = chat_session.send_message(api_request)
-
-                # Tampilkan dan simpan respons
+                
                 with st.chat_message("assistant"):
                     st.markdown(response.text)
+                
                 st.session_state.chat_history.append({"role": "assistant", "content": response.text})
                 save_chat(st.session_state.username, st.session_state.chat_history)
                 
-                # Reset file umum setelah digunakan
                 st.session_state.general_file_content = None
                 st.rerun()
 
