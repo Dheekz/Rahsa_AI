@@ -27,6 +27,13 @@ try:
 except ValueError:
     # Ambil kredensial dari Streamlit secrets
     creds_dict = st.secrets["firebase_credentials"]
+
+    # --- PERBAIKAN UTAMA DI SINI ---
+    # Kunci pribadi dari secrets.toml seringkali memiliki '\\n' sebagai ganti newline.
+    # Kita perlu memperbaikinya secara manual.
+    if 'private_key' in creds_dict:
+        creds_dict['private_key'] = creds_dict['private_key'].replace('\\n', '\n')
+
     cred = credentials.Certificate(creds_dict)
     firebase_admin.initialize_app(cred)
 
