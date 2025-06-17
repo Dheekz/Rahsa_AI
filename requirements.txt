@@ -11,3 +11,4 @@ faiss-cpu
 numpy
 openpyxl
 tabulate
+firebase-admin
