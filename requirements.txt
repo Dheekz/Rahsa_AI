@@ -1,0 +1,13 @@
+streamlit
+google-generativeai
+bcrypt
+pandas
+python-docx
+PyMuPDF
+Pillow
+langchain
+langchain-text-splitters
+faiss-cpu
+numpy
+openpyxl
+tabulate
