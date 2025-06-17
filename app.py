@@ -19,17 +19,37 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 import faiss
 import numpy as np
 import os
+import json # Import json untuk mem-parsing secrets
 
 # --- Konfigurasi Firebase ---
 try:
     # Coba inisialisasi hanya jika belum ada
     firebase_admin.get_app()
 except ValueError:
-    # Ambil kredensial dari Streamlit secrets
-    creds_dict = st.secrets["firebase_credentials"]
+    try:
+        # --- PERBAIKAN UTAMA DI SINI ---
+        # Ambil kredensial sebagai string mentah jika memungkinkan, lalu parse sebagai JSON.
+        # Ini memberikan kontrol lebih atas format data.
+        creds_json_str = st.secrets["firebase_credentials_json"]
+        creds_dict = json.loads(creds_json_str)
+        
+        # Inisialisasi dari kamus yang sudah di-parse
+        cred = credentials.Certificate(creds_dict)
+        firebase_admin.initialize_app(cred)
+    except Exception as e_json:
+        # Fallback ke metode lama jika metode JSON gagal
+        try:
+            creds_dict_fallback = st.secrets["firebase_credentials"]
+            if 'private_key' in creds_dict_fallback:
+                creds_dict_fallback['private_key'] = creds_dict_fallback['private_key'].replace('\\n', '\n')
+            cred_fallback = credentials.Certificate(creds_dict_fallback)
+            firebase_admin.initialize_app(cred_fallback)
+        except Exception as e_toml:
+            st.error("Gagal menginisialisasi Firebase. Pastikan format 'firebase_credentials' di secrets.toml benar.")
+            st.error(f"Error detail (JSON method): {e_json}")
+            st.error(f"Error detail (TOML method): {e_toml}")
+            st.stop()
 
-    cred = credentials.Certificate(creds_dict)
-    firebase_admin.initialize_app(cred)
 
 db = firestore.client()
 
