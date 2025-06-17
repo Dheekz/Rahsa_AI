@@ -167,8 +167,8 @@ def format_chat_for_download(chat_history):
     return formatted_string
 
 # --- Inisialisasi Aplikasi Streamlit ---
-st.set_page_config(page_title="AI RAG Perusahaan", layout="wide")
-st.title("🤖 AI Asisten dengan Firebase")
+st.set_page_config(page_title="Rahsa AI", layout="wide")
+st.title("🤖 Rahsa AI")
 
 # Inisialisasi session state
 if "logged_in" not in st.session_state: st.session_state.logged_in = False
