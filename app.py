@@ -57,7 +57,7 @@ if not API_KEY or API_KEY == "MASUKKAN_API_KEY_ANDA_DI_SINI":
 
 try:
     genai.configure(api_key=API_KEY)
-    generation_model = genai.GenerativeModel('gemini-2.0-flash')
+    generation_model = genai.GenerativeModel('gemini-2.5-flash')
     embedding_model = genai.GenerativeModel('models/embedding-001')
 except Exception as e:
     st.error(f"Gagal mengkonfigurasi Gemini API: {e}")
