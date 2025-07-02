@@ -101,22 +101,54 @@ def check_password(password, hashed_password):
 
 
 # --- Fungsi RAG dan Pemrosesan File (tidak berubah) ---
+# --- Fungsi RAG dan Pemrosesan File (VERSI MODIFIKASI) ---
 def get_text_from_file(uploaded_file):
+    """
+    Mengekstrak teks dari file yang diunggah.
+    Untuk file tabular (xlsx, csv), setiap baris diubah menjadi string tunggal
+    dengan format 'nama_kolom: nilai' untuk memberikan konteks yang lebih baik.
+    """
     file_bytes = uploaded_file.getvalue()
-    text_content = ""
     file_extension = os.path.splitext(uploaded_file.name)[1].lower()
+    text_content_list = [] # Kita akan membuat list of strings, bukan satu blok teks
+
     try:
         if file_extension == '.pdf':
             with fitz.open(stream=file_bytes, filetype="pdf") as doc:
-                text_content = "".join(page.get_text() for page in doc)
+                # Untuk PDF, kita kembalikan teks lengkap seperti sebelumnya
+                return "".join(page.get_text() for page in doc)
+        
         elif file_extension == '.docx':
             doc = docx.Document(io.BytesIO(file_bytes))
-            text_content = "\n".join([para.text for para in doc.paragraphs])
-        elif file_extension == '.xlsx':
-            df = pd.read_excel(io.BytesIO(file_bytes))
-            text_content = df.to_markdown(index=False)
-        else: return None
-        return text_content
+            # Untuk DOCX, kita juga kembalikan teks lengkap
+            return "\n".join([para.text for para in doc.paragraphs])
+
+        elif file_extension in ['.xlsx', '.csv']:
+            if file_extension == '.xlsx':
+                df = pd.read_excel(io.BytesIO(file_bytes))
+            else: # .csv
+                # Menggunakan Sniffer untuk mendeteksi delimiter secara otomatis
+                try:
+                    dialect = pd.io.common.sniff_buffer(io.BytesIO(file_bytes))
+                    df = pd.read_csv(io.BytesIO(file_bytes), delimiter=dialect.delimiter)
+                except Exception as e:
+                    st.warning(f"Gagal mendeteksi delimiter CSV secara otomatis, mencoba dengan koma. Error: {e}")
+                    df = pd.read_csv(io.BytesIO(file_bytes), delimiter=',')
+
+            # Mengubah setiap baris menjadi string yang deskriptif
+            # "Kolom1: Nilai1, Kolom2: Nilai2, ..."
+            for index, row in df.iterrows():
+                row_text = ", ".join([f"{col}: {val}" for col, val in row.items() if pd.notna(val)])
+                text_content_list.append(row_text)
+            
+            # Menggabungkan semua baris menjadi satu blok teks, dipisahkan oleh dua baris baru
+            # Ini memungkinkan text splitter untuk memisahnya per baris jika perlu
+            return "\n\n".join(text_content_list)
+            
+        else:
+            st.warning(f"Format file '{file_extension}' tidak didukung untuk ekstraksi teks RAG.")
+            return None
+
     except Exception as e:
         st.error(f"Gagal mengekstrak teks dari {uploaded_file.name}: {e}")
         return None
